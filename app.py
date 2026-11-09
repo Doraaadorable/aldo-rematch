@@ -35,6 +35,7 @@ import pandas as pd
 import streamlit as st
 
 import agent_strands as mod
+import disposition as dsp
 from notifications import (
     WaitlistStore,
     SnsNotificationService,
@@ -55,11 +56,7 @@ st.set_page_config(
     layout="wide",
 )
 
-_SYNTHETIC_BADGE = (
-    "⚠️ **Synthetic data only** – all returns, buyers, prices, costs, "
-    "net-recovery figures, and notifications are demo fixtures. "
-    "Nothing here represents real customers, orders, or financial results."
-)
+_SYNTHETIC_BADGE = "All returns, buyers, prices and costs on this page are synthetic fixtures."
 
 st.title("♻️ Return-to-Resale Matching — Demo")
 st.caption(_SYNTHETIC_BADGE)
@@ -108,7 +105,7 @@ with col_ret:
         "Value": [
             ret.get("return_order_number","–"), ret.get("product","–"),
             ret.get("sku","–"), ret.get("reason","–"),
-            f"{ret.get('refund_amount','–')} {ret.get('currency','')}  *(SYNTHETIC)*",
+            f"{ret.get('refund_amount','–')} {ret.get('currency','')}",
             ret.get("final_sale","–"), ret.get("condition","–"),
         ],
     })
@@ -118,8 +115,8 @@ with col_insp:
     st.table({
         "Field": [
             "Inspection ID","Status","Grade","Notes",
-            "Proposed price (SYNTHETIC)","Shipping (SYNTHETIC)",
-            "Cleaning (SYNTHETIC)","Handling (SYNTHETIC)","Eligibility approved",
+            "Proposed price","Shipping",
+            "Cleaning","Handling","Eligibility approved",
         ],
         "Value": [
             insp.get("inspection_id","–"), status_badge,
@@ -148,21 +145,14 @@ if status == "passed":
         net_rec        = match_result["net_recovery_cad"]
         costs_used     = match_result["cost_breakdown"]
 
-        st.markdown("**Price & cost breakdown** *(SYNTHETIC ASSUMPTIONS)*")
+        st.markdown("**Price and costs**")
         bc1, bc2, bc3, bc4, bc5 = st.columns(5)
-        bc1.metric("Proposed price",  f"CAD {proposed_price:.2f}", help="SYNTHETIC ASSUMPTION")
-        bc2.metric("Shipping",        f"CAD {costs_used['shipping']:.2f}", help="SYNTHETIC ASSUMPTION")
-        bc3.metric("Cleaning",        f"CAD {costs_used['cleaning']:.2f}", help="SYNTHETIC ASSUMPTION")
-        bc4.metric("Handling",        f"CAD {costs_used['handling']:.2f}", help="SYNTHETIC ASSUMPTION")
-        bc5.metric(
-            "Est. net recovery", f"CAD {net_rec:.2f}",
-            help="SYNTHETIC CALCULATION – estimated cost-recovery figure, not realized revenue or profit",
-        )
-        st.caption(
-            "Net recovery = proposed price − shipping − cleaning − handling.  "
-            "This is an **estimated cost-recovery figure only**, not realized revenue or profit.  "
-            "All amounts are **SYNTHETIC ASSUMPTIONS**."
-        )
+        bc1.metric("Proposed price",  f"CAD {proposed_price:.2f}")
+        bc2.metric("Shipping",        f"CAD {costs_used['shipping']:.2f}")
+        bc3.metric("Cleaning",        f"CAD {costs_used['cleaning']:.2f}")
+        bc4.metric("Handling",        f"CAD {costs_used['handling']:.2f}")
+        bc5.metric("Net recovery",    f"CAD {net_rec:.2f}",
+                   help="Proposed price − shipping − cleaning − handling")
 
         ranked   = match_result["ranked_eligible"]
         excluded = match_result["excluded"]
@@ -170,22 +160,19 @@ if status == "passed":
 
         st.markdown("**Qualifying buyers**")
         st.caption(
-            "A buyer qualifies when they pass all four checks: "
-            "**SKU preference**, **accepted condition grade**, **opt-in status**, "
-            "and **price ceiling** (max WTP ≥ proposed price).  "
-            "Max WTP is a self-reported price ceiling used only to screen affordability — "
-            "it is **not** a ranking signal and does not indicate stronger purchase intent.  "
-            "All qualifying buyers have the same estimated net recovery at the same price; "
-            "ties are broken by buyer ID (alphabetical)."
+            "A buyer qualifies on SKU preference, accepted grade, opt-in, and a "
+            "ceiling (max WTP) at or above the price.  Every qualifying buyer yields "
+            "the same net recovery, so they are ordered by headroom (ceiling − price): "
+            "the least price-sensitive buyer is asked first."
         )
         if ranked:
             st.dataframe(pd.DataFrame([{
                 "Rank": i+1, "Buyer ID": b["buyer_id"], "Name": b["name"],
-                "Max WTP — price ceiling only (SYNTHETIC)": f"CAD {b['max_wtp_cad']:.2f}",
-                "Est. net recovery — same for all (SYNTHETIC)": f"CAD {net_rec:.2f}",
-                "Selected": ("✅ Best match (buyer_id tiebreak)"
+                "Max WTP": f"CAD {b['max_wtp_cad']:.2f}",
+                "Headroom": f"CAD {b['max_wtp_cad'] - proposed_price:.2f}",
+                "Selected": ("✅ Best match"
                              if best and b["buyer_id"]==best["buyer_id"] else ""),
-            } for i, b in enumerate(ranked)]), hide_index=True, use_container_width=True)
+            } for i, b in enumerate(ranked)]), hide_index=True, width="stretch")
         else:
             st.warning("No qualifying buyers for this inspection.")
 
@@ -193,13 +180,72 @@ if status == "passed":
         if excluded:
             st.dataframe(pd.DataFrame([{
                 "Buyer ID": e["buyer_id"], "Reasons": "; ".join(e["reasons"])
-            } for e in excluded]), hide_index=True, use_container_width=True)
+            } for e in excluded]), hide_index=True, width="stretch")
         else:
             st.info("No buyers were excluded.")
 else:
     st.info(
         f"Inspection status is **{status}** – resale matching requires status **passed**.  "
         "The buyer qualification table is not shown."
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 3b – Disposition decision
+# ─────────────────────────────────────────────────────────────────────────────
+
+if status == "passed" and "error" not in match_result:
+    st.subheader("3b. Resell, liquidate or donate?")
+    st.caption(
+        "Expected value per unit under the assumptions below.  Resale pays "
+        "cleaning and handling up front; an item that does not sell within the "
+        "window pays a holding cost and leaves through the better of liquidation "
+        "or donation."
+    )
+
+    ceilings = [b["max_wtp_cad"] for b in mod.get_eligible_buyers(sku, insp["grade"])["eligible"]]
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        min_buyers = st.number_input("Buyers whose ceiling must clear the price", 1, 5, 2)
+        suggested = dsp.price_from_ceilings(ceilings, int(min_buyers))
+        st.caption(
+            f"Ceilings of matching buyers: {', '.join(f'{c:.0f}' for c in sorted(ceilings, reverse=True))} CAD.  "
+            + (f"Highest price at least {int(min_buyers)} of them clear: **CAD {suggested:.2f}**."
+               if suggested is not None else "Not enough matching buyers for that requirement.")
+        )
+        d_price = st.number_input("Resale price (CAD)", 0.0, 500.0, float(proposed_price), 1.0)
+        d_q = st.slider("Sell-through rate within the window", 0.0, 1.0, 0.6, 0.05)
+        d_hold = st.number_input("Holding cost if unsold (CAD)", 0.0, 100.0, 4.0, 0.5)
+    with dc2:
+        d_liq = st.number_input("Liquidation value (CAD)", 0.0, 500.0, 18.0, 1.0)
+        d_liq_cost = st.number_input("Liquidation cost (CAD)", 0.0, 100.0, 2.0, 0.5)
+        d_don = st.number_input("Donation value, e.g. tax or avoided disposal (CAD)", 0.0, 500.0, 0.0, 1.0)
+        d_don_cost = st.number_input("Donation cost (CAD)", 0.0, 100.0, 1.0, 0.5)
+
+    assumptions = dsp.Assumptions(
+        resale_price=d_price,
+        prep_cost=costs_used["cleaning"] + costs_used["handling"],
+        shipping_cost=costs_used["shipping"],
+        sell_through=d_q,
+        holding_cost=d_hold,
+        liquidation_value=d_liq,
+        liquidation_cost=d_liq_cost,
+        donation_value=d_don,
+        donation_cost=d_don_cost,
+    )
+    decision = dsp.decide(assumptions)
+    labels = {"resell": "Resell", "liquidate": "Liquidate", "donate": "Donate"}
+    vc = st.columns(4)
+    for col, key in zip(vc, ("resell", "liquidate", "donate")):
+        col.metric(labels[key], f"CAD {decision['values'][key]:.2f}",
+                   delta="best" if decision["choice"] == key else None, delta_color="off")
+    q_star = decision["break_even_sell_through"]
+    vc[3].metric("Break-even sell-through",
+                 "never" if q_star is None or q_star > 1 else f"{q_star:.0%}")
+    st.markdown(
+        f"**{labels[decision['choice']]}**, ahead of the next option by CAD {decision['margin']:.2f}.  "
+        + ("Resale cannot beat the alternatives at this price."
+           if q_star is None or q_star > 1 else
+           f"Resale wins whenever more than {q_star:.0%} of such items sell within the window.")
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,8 +261,8 @@ def _render_offer_card(offer_data: dict, *, source_label: str) -> None:
     oc1, oc2, oc3, oc4 = st.columns(4)
     oc1.metric("Offer ID",                       offer_data.get("offer_id","–"))
     oc2.metric("Buyer",                          offer_data.get("buyer_id","–"))
-    oc3.metric("Price (SYNTHETIC)",              f"CAD {offer_data.get('proposed_sale_price_cad',0):.2f}")
-    oc4.metric("Est. net recovery (SYNTHETIC)",  f"CAD {offer_data.get('net_recovery_cad',0):.2f}")
+    oc3.metric("Price",              f"CAD {offer_data.get('proposed_sale_price_cad',0):.2f}")
+    oc4.metric("Net recovery",  f"CAD {offer_data.get('net_recovery_cad',0):.2f}")
     st.caption(
         f"{source_label}  |  Status: `{offer_data.get('status','–')}` | "
         f"File: `{offer_data.get('offer_id','unknown')}`  —  "
@@ -260,7 +306,7 @@ with st.form("waitlist_form", clear_on_submit=True):
         wl_grades     = st.multiselect("Accepted condition grades", _ALL_GRADES, default=["A","B"])
     with wl_col2:
         wl_wtp        = st.number_input(
-            "Max willingness-to-pay CAD *(SYNTHETIC price ceiling)*",
+            "Max willingness-to-pay CAD",
             min_value=0.01, value=60.00, step=1.00,
         )
         wl_notify     = st.checkbox(
@@ -300,11 +346,11 @@ if all_entries:
         "Buyer ID":       e["buyer_id"],
         "SKU":            e["sku"],
         "Accepted grades": ", ".join(e.get("accepted_grades",[])),
-        "Max WTP (SYNTHETIC)": f"CAD {e.get('max_wtp_cad',0):.2f}",
+        "Max WTP": f"CAD {e.get('max_wtp_cad',0):.2f}",
         "Notification opt-in": "✅" if e.get("wants_notification") else "❌",
         "Active":         "✅" if e.get("active") else "❌",
         "Joined":         e.get("joined_at","–")[:19],
-    } for e in all_entries]), hide_index=True, use_container_width=True)
+    } for e in all_entries]), hide_index=True, width="stretch")
 else:
     st.info("No waitlist entries yet. Use the form above to add one.")
 
@@ -333,12 +379,10 @@ else:
         waitlist_entries=active_consented,
     )
 
-    st.markdown(f"**Eligible waitlist recipients** (up to 5, ranked by buyer_id)")
+    st.markdown("**Eligible waitlist recipients** (up to 5, ordered by headroom)")
     st.caption(
-        "Eligibility requires: active waitlist membership, notification consent, "
-        "SKU match, accepted grade, and max WTP ≥ proposed price.  "
-        "Ranked alphabetically by buyer_id as a deterministic tiebreak.  "
-        "This is **not** a prediction of purchase likelihood."
+        "Eligibility requires active waitlist membership, notification consent, "
+        "SKU match, accepted grade, and max WTP ≥ proposed price."
     )
 
     if selection["selected"]:
@@ -347,14 +391,14 @@ else:
             sel_rows.append({
                 "Rank": i+1, "Buyer ID": e["buyer_id"],
                 "SKU": e["sku"],
-                "Max WTP (SYNTHETIC)": f"CAD {e.get('max_wtp_cad',0):.2f}",
+                "Max WTP": f"CAD {e.get('max_wtp_cad',0):.2f}",
                 "Notification consent": "✅",
             })
-        st.dataframe(pd.DataFrame(sel_rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(sel_rows), hide_index=True, width="stretch")
         if selection["capped"]:
             st.caption(
                 f"ℹ️ {selection['total_eligible']} buyers qualified; "
-                "only the first 5 (alphabetical) are shown."
+                "only the first 5 by headroom are shown."
             )
     else:
         st.info("No waitlist users qualify for notification with the current entries.")
@@ -363,7 +407,7 @@ else:
         with st.expander("Excluded from notification"):
             st.dataframe(pd.DataFrame([{
                 "Buyer ID": e["buyer_id"], "Reasons": "; ".join(e["reasons"])
-            } for e in selection["excluded"]]), hide_index=True, use_container_width=True)
+            } for e in selection["excluded"]]), hide_index=True, width="stretch")
 
     # Notification preview
     if selection["selected"] and offer_files:
@@ -398,7 +442,7 @@ else:
                 "Configured": "✅ Yes" if arn else "❌ Not set",
                 "ARN preview": (arn[:40]+"…" if arn and len(arn)>40 else arn or "–"),
             })
-        st.dataframe(pd.DataFrame(arn_rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(arn_rows), hide_index=True, width="stretch")
         st.caption(
             "Each buyer must have a dedicated SNS Standard topic with only "
             "team-controlled, confirmed test-email subscriptions.  "
@@ -693,9 +737,6 @@ if run_clicked:
 
 st.divider()
 st.caption(
-    "**ALDO Hackathon prototype** — synthetic data only.  "
-    "No real customers, orders, prices, or financial decisions.  "
-    "Net recovery is an estimated cost-recovery figure, not realized revenue or profit.  "
-    "Notifications are previews or SNS delivery confirmations only — "
-    "not purchase commitments, marketing campaigns, or proven conversions."
+    "ReMatch — ALDO Group challenge prototype.  An SNS MessageId confirms the "
+    "message was accepted for delivery, not that it was read or led to a purchase."
 )

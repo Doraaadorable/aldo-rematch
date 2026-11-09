@@ -22,27 +22,19 @@ DEMO-003  Pre-approved case.  condition="inspected – grade B";
 
 Design constraints
 ------------------
-• Synthetic data only – no real customer records, orders, or prices.
-• ALL prices, costs, and net-recovery figures are labelled SYNTHETIC ASSUMPTIONS.
-• A buyer's max_wtp is a price-feasibility ceiling only – not evidence of
-  higher net recovery or stronger purchase intent.
-• Net recovery = price – costs.  It is the same for every qualifying buyer
-  at the same proposed price.  "Net recovery" is an estimated cost-recovery
-  figure, not realized revenue or profit.
-• Ranking uses net_recovery (equal for all qualifying buyers) with buyer_id
-  as the sole deterministic tiebreak.  max_wtp is never used in ranking.
+• All returns, buyers, prices and costs are synthetic fixtures.
+• Net recovery = price − shipping − cleaning − handling.  At a fixed price it
+  is the same for every qualifying buyer, so buyers are ordered by headroom
+  (max_wtp − price): who is asked first, not who pays more.
 • create_resale_offer enforces the fixture's proposed_sale_price_cad;
-  the model cannot supply an arbitrary price.
-• Only "passed" inspections may proceed to resale.  Any other status –
-  "pending", "failed", or unknown – is rejected immediately.
-• demo_eligibility_approved must be True in the fixture before an offer
-  can be created.  The model must never invent or assume this approval.
-• Tool functions are importable and callable without a Bedrock client;
-  the full test suite runs without AWS credentials.
-• BedrockModel and Agent are built inside build_agent(); importing this
-  module never touches Bedrock.
-• State is anchored to <script-dir>/demo_state/ regardless of cwd.
-• No credentials, secrets, or PII are stored in this file.
+  the model cannot supply a price.
+• Only "passed" inspections may proceed to resale; any other status is
+  rejected.
+• demo_eligibility_approved must be True in the fixture before an offer can
+  be created.  The model cannot set it.
+• Tools are plain functions callable without Bedrock; the tests need no AWS
+  credentials.  build_agent() is the only place that touches Bedrock.
+• State lives in <script-dir>/demo_state/ regardless of cwd.
 """
 
 from __future__ import annotations
@@ -50,6 +42,8 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+
+from disposition import rank_by_headroom
 
 # ---------------------------------------------------------------------------
 # State directory – anchored to this script's location, not cwd
@@ -342,39 +336,21 @@ def get_eligible_buyers(sku: str, grade: str) -> dict:
 @tool
 def calculate_resale_matches(inspection_id: str) -> dict:
     """
-    Rank eligible buyers by net recovery using deterministic Python arithmetic.
+    Screen buyers for an inspected item and order those who qualify.
 
-    Net recovery (SYNTHETIC CALCULATION):
-        net_recovery = proposed_sale_price − shipping − cleaning − handling
+    net_recovery = proposed_sale_price − shipping − cleaning − handling
 
-    "Net recovery" is an estimated cost-recovery figure, not realized revenue
-    or profit.  It is identical for every qualifying buyer at the same price;
-    max_wtp is NOT used in ranking.
-
-    A buyer qualifies only if:
-      1. Their max_wtp_cad >= proposed_sale_price_cad  (price ceiling check)
-      2. net_recovery > 0
-
-    Ranking: by net_recovery (equal for all qualifying buyers), buyer_id as
-    the sole deterministic tiebreak.
-
-    Only "passed" inspections proceed. Any other status returns an error.
-
-    ALL prices, costs, and figures are SYNTHETIC ASSUMPTIONS.
+    A buyer qualifies when opted in, the SKU and grade match, the stated
+    ceiling max_wtp_cad is at least the proposed price, and net recovery is
+    positive.  Qualifying buyers are ordered by headroom (max_wtp − price),
+    largest first, buyer_id breaking ties.  Only "passed" inspections proceed.
 
     Args:
-        inspection_id: The inspection ID to look up price and cost assumptions.
+        inspection_id: The inspection whose price and costs are used.
 
     Returns:
-        Dict with:
-          ``best_match``             – top-ranked qualifying buyer or None
-          ``ranked_eligible``        – all qualifying buyers, best first
-          ``excluded``               – screened-out buyers with reasons
-          ``net_recovery_cad``       – estimated cost recovery (SYNTHETIC)
-          ``proposed_sale_price_cad``
-          ``cost_breakdown``         – itemised assumed costs (SYNTHETIC)
-          ``notes``                  – plain-English summary
-          ``disclaimer``             – mandatory label on all figures
+        Dict with best_match, ranked_eligible, excluded, net_recovery_cad,
+        proposed_sale_price_cad, cost_breakdown and notes.
     """
     print(f"\n[TOOL] Calculating resale matches for {inspection_id}")
 
@@ -435,24 +411,20 @@ def calculate_resale_matches(inspection_id: str) -> dict:
         else:
             qualified.append(buyer)
 
-    # Rank by net_recovery (tied for all qualifying buyers at this price),
-    # buyer_id as the sole deterministic tiebreak.
-    ranked = sorted(qualified, key=lambda b: b["buyer_id"])
+    ranked = rank_by_headroom(qualified, proposed_price)
     best = ranked[0] if ranked else None
 
     notes_parts = [
-        f"Proposed price: {proposed_price:.2f} CAD (SYNTHETIC ASSUMPTION).",
-        f"Total assumed costs: {total_cost:.2f} CAD "
-        f"(shipping {costs['shipping']:.2f} + "
-        f"cleaning {costs['cleaning']:.2f} + "
-        f"handling {costs['handling']:.2f}) – ALL SYNTHETIC ASSUMPTIONS.",
-        f"Estimated net recovery: {net_recovery:.2f} CAD (SYNTHETIC CALCULATION – "
-        f"not realized revenue or profit).",
+        f"Proposed price: {proposed_price:.2f} CAD.",
+        f"Costs: {total_cost:.2f} CAD (shipping {costs['shipping']:.2f}, "
+        f"cleaning {costs['cleaning']:.2f}, handling {costs['handling']:.2f}).",
+        f"Net recovery: {net_recovery:.2f} CAD.",
         f"Qualifying buyers: {len(ranked)}. Excluded: {len(excluded)}.",
     ]
     if best:
+        headroom = best["max_wtp_cad"] - proposed_price
         notes_parts.append(
-            f"Best match (tiebreak: buyer_id): {best['buyer_id']}."
+            f"Best match: {best['buyer_id']} (ceiling {headroom:.2f} CAD above price)."
         )
     else:
         notes_parts.append("No qualifying buyer found.")
@@ -465,12 +437,6 @@ def calculate_resale_matches(inspection_id: str) -> dict:
         "proposed_sale_price_cad": proposed_price,
         "cost_breakdown": costs,
         "notes": "  ".join(notes_parts),
-        "disclaimer": (
-            "All prices, costs, and net-recovery figures are SYNTHETIC ASSUMPTIONS "
-            "for demo purposes only.  Net recovery is an estimated cost-recovery "
-            "figure, not realized revenue or profit.  This is not a financial "
-            "recommendation."
-        ),
     }
 
 
@@ -733,9 +699,8 @@ def notify_waitlist_buyers(inspection_id: str, offer_id: str) -> dict:
       - accepted condition grade
       - max_wtp_cad >= proposed_sale_price_cad
 
-    Up to five recipients are selected, ranked by buyer_id (alphabetical,
-    as a deterministic tiebreak).  This is NOT a prediction of purchase
-    likelihood.  If fewer than five qualify, only those are notified.
+    Up to five recipients are selected, ordered by headroom (max_wtp − price).
+    If fewer than five qualify, only those are notified.
 
     Mode is dry_run by default.  Live sends require NOTIFY_LIVE=1 in the
     environment AND explicit UI confirmation – the model cannot activate live mode.

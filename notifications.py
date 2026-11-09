@@ -4,7 +4,7 @@ notifications.py  –  Waitlist management and SNS notification service
 Provides:
 
   WaitlistStore            – persist and retrieve waitlist entries (JSON files)
-  select_notification_recipients – reuse matching logic; cap at 5; rank by buyer_id
+  select_notification_recipients – reuse matching logic; cap at 5; rank by headroom
   SnsNotificationService   – dry_run (no AWS call) and live (boto3 SNS) modes
   build_notification_payload – construct message content (no PII, no ARNs)
   notify_matched_buyers    – orchestrate selection + send; called by the agent tool
@@ -38,6 +38,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from disposition import rank_by_headroom
 
 # ---------------------------------------------------------------------------
 # State directory (shared with agent_strands._STATE_DIR – same physical dir)
@@ -196,9 +198,8 @@ def select_notification_recipients(
       4. Inspection grade is in accepted_grades
       5. max_wtp_cad >= proposed_price_cad  (price ceiling check)
 
-    Ranking uses buyer_id alphabetically as the sole deterministic tiebreak.
-    All qualifying buyers have equal standing at the same proposed price.
-    This is NOT a prediction of purchase likelihood.
+    Qualifying entries are ordered by headroom (max_wtp − price), largest
+    first, buyer_id breaking ties; the cap keeps the top of that order.
 
     If fewer than max_recipients qualify, only those are selected.
     Recipients are never invented.
@@ -247,8 +248,7 @@ def select_notification_recipients(
         else:
             selected.append(entry)
 
-    # Deterministic ranking: buyer_id alphabetical
-    selected.sort(key=lambda e: e["buyer_id"])
+    selected = rank_by_headroom(selected, proposed_price_cad)
     total_eligible = len(selected)
     capped = total_eligible > max_recipients
     selected = selected[:max_recipients]
