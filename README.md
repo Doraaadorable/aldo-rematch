@@ -2,7 +2,7 @@
 
 A returned pair that passes inspection can be resold to a waiting buyer, sent to a liquidator or donated. ReMatch is an agent that works through that decision: it looks up the return, checks inspection status, finds opted-in buyers whose size, grade and price ceiling fit, creates the offer and notifies the waitlist.
 
-Built for the ALDO Group challenge at a retail Gen-AI hackathon in October 2026, where our team of six placed **2nd of 10 finalists**. I was the team's modeller and wrote the code and the Streamlit dashboard. This repository contains the synthetic-data version; the version built on competition data is kept private.
+Built at the [Retail Gen AI Hackathon](https://www.mcgill.ca/bensadoun-school/featured-events/retail-gen-ai-hackathon) (McGill Bensadoun School of Retail Management with ALDO Group, AWS and OODARIS, October 2026), where our team of six placed **2nd of 10 finalists**. I was the team's modeller and wrote the code and the Streamlit dashboard. This repository contains the synthetic-data version; the version built on competition data is kept private.
 
 ## How decisions are made
 
