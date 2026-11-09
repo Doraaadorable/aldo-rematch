@@ -201,12 +201,21 @@ def test_zero_eligible_selects_none():
     assert result["capped"] is False
 
 
-def test_ranking_is_alphabetical_buyer_id():
-    """Recipients are ranked alphabetically by buyer_id."""
-    entries = [_make_entry("BUYER-C"), _make_entry("BUYER-A"), _make_entry("BUYER-B")]
+def test_ranking_by_headroom_then_buyer_id():
+    """Larger ceiling headroom first; buyer_id breaks ties."""
+    entries = [_make_entry("BUYER-C", wtp=58.0), _make_entry("BUYER-A", wtp=56.0),
+               _make_entry("BUYER-B", wtp=58.0)]
     result  = select_notification_recipients(_PASSED_INSP, _SKU, 55.0, entries)
     ids     = [e["buyer_id"] for e in result["selected"]]
-    assert ids == sorted(ids)
+    assert ids == ["BUYER-B", "BUYER-C", "BUYER-A"]
+
+
+def test_cap_keeps_largest_headroom():
+    """When capped, the dropped entry is the one with the least headroom."""
+    entries = [_make_entry(f"BUYER-{c}", wtp=60.0) for c in "ABCDE"]
+    entries.append(_make_entry("BUYER-0", wtp=55.0))
+    result  = select_notification_recipients(_PASSED_INSP, _SKU, 55.0, entries)
+    assert "BUYER-0" not in [e["buyer_id"] for e in result["selected"]]
 
 
 # ---------------------------------------------------------------------------

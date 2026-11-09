@@ -163,12 +163,21 @@ def test_demo003_net_recovery_is_39():
     )
 
 
+def test_best_match_follows_headroom(monkeypatch):
+    """Raising BUYER-E's ceiling above BUYER-A's makes BUYER-E the best match."""
+    buyers = [dict(b, max_wtp_cad=70.0) if b["buyer_id"] == "BUYER-E" else dict(b)
+              for b in mod.BUYERS]
+    monkeypatch.setattr(mod, "BUYERS", buyers)
+    result = mod.calculate_resale_matches("INSPECT-DEMO-003")
+    assert [b["buyer_id"] for b in result["ranked_eligible"]] == ["BUYER-E", "BUYER-A"]
+
+
 def test_demo003_best_match_is_buyer_a():
-    """With tied net recovery, buyer_id tiebreak makes BUYER-A the best match."""
+    """BUYER-A's ceiling (60) clears the 55 price by more than BUYER-E's (58)."""
     result = mod.calculate_resale_matches("INSPECT-DEMO-003")
     assert result["best_match"] is not None
     assert result["best_match"]["buyer_id"] == "BUYER-A", (
-        f"Expected BUYER-A (tiebreak), got {result['best_match']['buyer_id']}"
+        f"Expected BUYER-A (largest headroom), got {result['best_match']['buyer_id']}"
     )
 
 
