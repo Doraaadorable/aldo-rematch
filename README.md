@@ -2,7 +2,7 @@
 
 A returned pair that passes inspection can be resold to a waiting buyer, sent to a liquidator or donated. ReMatch is an agent that works through that decision: it looks up the return, checks inspection status, finds opted-in buyers whose size, grade and price ceiling fit, creates the offer and notifies the waitlist.
 
-Built at the [Retail Gen AI Hackathon](https://www.mcgill.ca/bensadoun-school/featured-events/retail-gen-ai-hackathon) (McGill Bensadoun School of Retail Management with ALDO Group, AWS and OODARIS, October 2026), where our team of six placed **2nd of 10 finalists**. I was the team's modeller and wrote the code and the Streamlit dashboard. This repository contains the synthetic-data version; the version built on competition data is kept private.
+Built at the [Retail Gen AI Hackathon](https://www.mcgill.ca/bensadoun-school/featured-events/retail-gen-ai-hackathon) (McGill Bensadoun School of Retail Management with ALDO Group, AWS and OODARIS, October 2026), where our team of six placed **2nd of 10 finalists**. I was the team's modeller and wrote the code and the Streamlit dashboard. This repository contains the synthetic-data version; the version built on competition data is kept private. After the competition I added the resell, liquidate or donate model (`disposition.py`), ordered buyers by price headroom instead of buyer ID, and set up CI.
 
 ## How decisions are made
 
@@ -17,7 +17,7 @@ The language model (Amazon Nova 2 Lite on Bedrock, via Strands Agents) chooses w
 | Notifications | Up to five waitlist buyers, by the same order; dry run unless `NOTIFY_LIVE=1` and confirmed in the UI |
 | Turn limit | 10 agent turns |
 
-## Resell, liquidate or donate (`disposition.py`)
+## Resell, liquidate or donate (`disposition.py`, added after the competition)
 
 Resale is not free money: cleaning and handling are paid up front, and an item that does not sell within the listing window still has to be liquidated or donated after a holding cost. With price *p*, shipping *s* (paid only on a sale), preparation *c*, holding cost *h*, sell-through rate *q* and *A* the better of liquidation and donation (net of their costs):
 
